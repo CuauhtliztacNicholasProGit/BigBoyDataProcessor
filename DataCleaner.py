@@ -53,6 +53,7 @@ class DataCleaner:
             'strip_underscores': lambda s: s.str.replace('_', ' ', regex=False),
             'universal_text_scrubber': lambda s: s.apply(self.universal_text_scrubber),
             
+            
         }
 
     @staticmethod
@@ -148,6 +149,24 @@ class DataCleaner:
                 self.df[col] = self.df[col].round(round_decimals)
 
         return self.df
+    
+    def drop_columns(self, columns_to_drop: list) -> pd.DataFrame:
+        """
+        Safely removes a list of columns from the dataframe.
+        """
+        # Find which columns actually exist in the dataframe
+        existing_cols = [c for c in columns_to_drop if c in self.df.columns]
+        missing_cols = [c for c in columns_to_drop if c not in self.df.columns]
+        
+        if existing_cols:
+            self.df = self.df.drop(columns=existing_cols)
+            print(f"  -> Successfully dropped {len(existing_cols)} columns: {', '.join(existing_cols)}")
+            
+        if missing_cols:
+            print(f"  -> WARNING: Could not find these columns to drop: {', '.join(missing_cols)}")
+            
+        return self.df
+    
     def apply_custom_function(self, columns: list, custom_func) -> pd.DataFrame:
         """
         The 'Open Door' method. Allows you to pass any custom Python function 
