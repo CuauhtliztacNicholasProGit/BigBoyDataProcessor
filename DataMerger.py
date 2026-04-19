@@ -12,7 +12,14 @@ Returns:
 - a merged DataFrame
 
 """
-
+#one hot feature explosion --- can cause sparsity
+#If we have to many cats, one hot can creat problems, to sparse of a data frame
+#for each column, we only have X 2% of the time or something. 
+#becomes a lot harder to get meaningful pattersn
+#dont want to one hot encode when lots of catagories, try courser catagories, get it down to 10 or 5
+#are there natural ways to bin the data? gotta be careful cuz that needs domain experties
+#text options - amkes senes or dont make sense 
+# what kind of info is useful to be encoding. 
 import pandas as pd
 from DataCleaner import DataCleaner
 
@@ -21,7 +28,7 @@ class DataMerger:
     @staticmethod
     def merge_datasets(base_df: pd.DataFrame, new_df: pd.DataFrame, on: list, how: str = 'left', filters: dict = None, collapse_duplicates: bool = True) -> pd.DataFrame:
         """
-        Merges two datasets safely. 
+        Merges datasets safely. 
         - filters: A dictionary of column:value pairs to filter the incoming dataset by.
         - collapse_duplicates: Prevents row explosion by keeping only the first instance.
         """
@@ -71,7 +78,7 @@ class DataMerger:
             new_df, 
             on=on, 
             how=how, 
-            suffixes=('_base', '_new')
+            suffixes=('_x', '_y')
         )
         
         return merged_df

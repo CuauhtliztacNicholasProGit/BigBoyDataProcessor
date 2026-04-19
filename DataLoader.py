@@ -44,6 +44,7 @@ class DataLoader:
             '.feather': pd.read_feather,
             '.rdata': self._load_rdata,
             '.rds': self._load_rdata
+            'xpt'
         }
 
     def _load_rdata(self, path, **kwargs) -> pd.DataFrame:

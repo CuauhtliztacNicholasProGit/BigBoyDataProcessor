@@ -31,11 +31,13 @@ Bugs fixed vs v2.0
   `self.df[column]`
 - output_file.endswith() crashed when output_file was None
 - merge _x/_y collisions were silently passed downstream
+- merge _base/_new collision resolution is not allowed by python syntax - renamed to x and y. 
 """
 
 import pandas as pd
 import numpy as np
 
+from DirectoryCrawler import DirectoryCrawler
 from DataLoader    import DataLoader
 from DataMerger    import DataMerger
 from DataCleaner   import DataCleaner
@@ -43,7 +45,20 @@ from Imputer       import Imputer
 from FeatureEngineer import FeatureEngineer
 from ModelFormater import ModelFormatter
 
+# STAGE 0 - Crawl directory to build merge_configs (optional for large foulder sets)
+def directory_crawler(
+    dir_path: str, 
+    file_extension: str, 
+    name_pattern: str = None
+) -> list:
+    """
+    Utility function to crawl a working directory for files matching specific criteria,
+    returning a list of file paths that can be used in the merge stage.
+    """
+    crawler = DirectoryCrawler(dir_path)
+    file_paths = crawler.find_files(extension=file_extension, name_pattern=name_pattern)
 
+    return()
 
 #  STAGE 1 — Load
 
@@ -153,6 +168,25 @@ def merge_datasets(
         df = validate_merge(df, on=on)
 
     return df
+
+def auto_prepare_merges(
+        folder_path, 
+        extension, 
+        on_keys, 
+        how = 'left'
+    ):
+    """
+    Scans a folder and automatically creates the 'merge_configs' list.
+    No manual typing of filenames required.
+    """
+    from DirectoryCrawler import DirectoryCrawler
+    
+    # Scout finds the files
+    crawler = DirectoryCrawler(folder_path)
+    file_paths = crawler.find_files(extension=extension)
+    
+    # Build the instruction list for the loop in BioDataProcessor
+    return [{'file': p, 'on': on_keys, 'how': how, 'collapse_duplicates': True} for p in file_paths]
 
 
 #  STAGE 4 — Validate merge (no _x / _y leaks)
@@ -463,6 +497,15 @@ def format_for_ml(
 
     return formatter.get_dataframe()
 
+# STAGE 9.5 - Hyperparameter tunning. 
+def hyper_parameter_tuner(model, param_space, method = None, cv = None, n_iter = None, scoring = None, n_jobs = -1, random_state = 42):
+    """
+    Hyperparameter tuning using either GridSearchCV or RandomizedSearchCV (for now...).
+
+    """
+    from HyperParameterTuner import HyperParameterTuner
+    tuner = HyperParameterTuner(model, param_space, method, cv, n_iter, scoring, n_jobs, random_state)
+    return tuner.fit(X, y)  # X_train and y_train should be defined in the context where this is called
 
 #  STAGE 10 — Save
 
@@ -478,152 +521,6 @@ def save_output(
     return df
 
 
-#  DEFAULT PIPELINE  ← the one function you call
-
-def run_default_pipeline(
-    primary_file: str,
-    output_file: str = 'processed_output.csv',
-
-    # --- Stage 2: text cleaning ---
-    drop_columns: list = None,
-    string_clean_cols: list = None,          # None = all string columns
-    string_clean_options: dict = None,       # None = universal scrub + lowercase + strip
-
-    # --- Stage 3: merges ---
-    merge_configs: list = None,
-
-    # --- Stage 4: merge collision resolution ---
-    collision_strategy: str = 'keep_base',
-
-    # --- Stage 5: deduplication ---
-    dedup_subset: list = None,
-    dedup_keep: str = 'first',
-    dedup_sort_by: list = None,
-    dedup_sort_ascending: bool = True,
-
-    # --- Stage 6: lab unit normalisation ---
-    lab_configs: list = None,
-
-    # --- Stage 7: imputation ---
-    impute_drop_threshold: float = 50.0,
-    impute_strategies: list = None,
-
-    # --- Stage 8: feature engineering ---
-    engineer_steps: list = None,
-
-    # --- Stage 9: ML formatting ---
-    encode_categorical: bool = True,
-    exclude_encode_prefixes: tuple = ('ID', 'LNK_', 'SITE'),
-    scale_method: str = 'standard',
-    exclude_scale_cols: list = None,
-
-    # --- Dependency injection (for testing / subclassing) ---
-    loader_cls=DataLoader,
-    merger_cls=DataMerger,
-    cleaner_cls=DataCleaner,
-    imputer_cls=Imputer,
-    engineer_cls=FeatureEngineer,
-    formatter_cls=ModelFormatter,
-) -> pd.DataFrame:
-    """
-    Run the full default processing pipeline end-to-end.
-
-    Calling with only `primary_file` and `output_file` is enough for a
-    standard run.  Every other parameter has a safe default.
-
-    If you need a non-standard sequence (e.g. engineer features before
-    imputing, or run two separate cleaning passes) call the individual
-    stage functions directly — they all accept and return plain DataFrames.
-
-    Minimal example
-    ---------------
-    df = run_default_pipeline('cohort.csv', 'cohort_ml_ready.csv')
-
-    With merges and lab normalisation
-    -----------------------------------
-    df = run_default_pipeline(
-        primary_file='cohort.csv',
-        output_file='cohort_ml_ready.csv',
-        merge_configs=[
-            {'file': 'labs.csv', 'on': ['PATIENT_ID'],
-             'filters': {'STATUS': 'Final'}, 'collapse_duplicates': True},
-        ],
-        lab_configs=[
-            {'value_col': 'GLUCOSE', 'unit_col': 'GLUCOSE_UNIT',
-             'canonical': 'mg/dL', 'conversions': {'mmol/L': 6.945}},
-        ],
-        impute_strategies=[
-            {'cols': ['AGE', 'BMI'],  'method': 'median'},
-            {'cols': ['SITE_CODE'],   'method': 'mode'},
-        ],
-        engineer_steps=[
-            {'tool': 'log_transform', 'column': 'LOS_DAYS'},
-        ],
-    )
-    """
-
-    # 1. Load
-    df = load_data(primary_file, loader_cls=loader_cls)
-
-    # 2. Clean text on primary BEFORE any merge
-    df = clean_text(
-        df,
-        columns=string_clean_cols,
-        options=string_clean_options,
-        drop_columns=drop_columns,
-        cleaner_cls=cleaner_cls
-    )
-
-    # 3. Merge (each incoming dataset is also cleaned inside merge_datasets)
-    if merge_configs:
-        df = merge_datasets(
-            df,
-            merge_configs=merge_configs,
-            loader_cls=loader_cls,
-            merger_cls=merger_cls,
-            cleaner_cls=cleaner_cls
-        )
-
-    # 4. Validate merge (resolve _x/_y collisions if any slipped through)
-    df = validate_merge(df, collision_strategy=collision_strategy)
-
-    # 5. Deduplicate
-    df = deduplicate(
-        df,
-        subset=dedup_subset,
-        keep=dedup_keep,
-        sort_by=dedup_sort_by,
-        sort_ascending=dedup_sort_ascending
-    )
-
-    # 6. Normalise lab units
-    df = normalize_lab_units(df, lab_configs=lab_configs)
-
-    # 7. Impute
-    df = impute_missing(
-        df,
-        drop_threshold=impute_drop_threshold,
-        strategies=impute_strategies,
-        imputer_cls=imputer_cls
-    )
-
-    # 8. Feature engineering
-    df = engineer_features(df, steps=engineer_steps, engineer_cls=engineer_cls)
-
-    # 9. Format for ML
-    df = format_for_ml(
-        df,
-        encode_categorical=encode_categorical,
-        exclude_encode_prefixes=exclude_encode_prefixes,
-        scale_method=scale_method,
-        exclude_scale_cols=exclude_scale_cols,
-        formatter_cls=formatter_cls
-    )
-
-    # 10. Save
-    df = save_output(df, output_file=output_file)
-
-    return df
 
 
 def _header(title: str) -> str:
