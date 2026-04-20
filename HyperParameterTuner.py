@@ -1,8 +1,17 @@
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 
 class HyperparameterTuner:
-    # Changed n_jobs default from 1 to -1 to utilize all available CPU cores by default
-    def __init__(self, model, param_space, method='random', cv=5, n_iter=10, scoring=None, n_jobs=-1, random_state=42):
+    """
+    Lightweight wrapper for hyperparameter search.
+
+    Warning:
+    Leave search-level n_jobs as 1 or None when tuning models that already
+    manage their own threading internally, such as CatBoost, XGBoost, or
+    LightGBM. Setting n_jobs=-1 here can oversubscribe CPU threads and cause
+    contention or lockups.
+    """
+
+    def __init__(self, model, param_space, method='random', cv=5, n_iter=10, scoring=None, n_jobs=1, random_state=42):
         self.model = model
         self.param_space = param_space
         self.method = method
@@ -11,6 +20,8 @@ class HyperparameterTuner:
         self.scoring = scoring
         self.n_jobs = n_jobs
         self.random_state = random_state
+
+        self._validate_threading_config()
         
         self.best_estimator_ = None
         self.best_params_ = None
@@ -62,6 +73,26 @@ class HyperparameterTuner:
     def get_best_params(self):
         self._check_is_fitted()
         return self.best_params_
+
+    def _validate_threading_config(self):
+        """Fail fast on unsafe nested parallelism settings."""
+        if self.n_jobs != -1:
+            return
+
+        model_name = type(self.model).__name__
+        known_self_threaded_models = {
+            'CatBoostClassifier', 'CatBoostRegressor',
+            'XGBClassifier', 'XGBRegressor',
+            'LGBMClassifier', 'LGBMRegressor',
+        }
+        likely_thread_controls = ('thread_count', 'nthread', 'num_threads')
+
+        if model_name in known_self_threaded_models or any(hasattr(self.model, attr) for attr in likely_thread_controls):
+            raise ValueError(
+                f"Unsafe threading configuration detected for {model_name}: "
+                "n_jobs=-1 at the search level can cause CPU thread contention. "
+                "Use n_jobs=1 or None in HyperparameterTuner and configure model threading separately."
+            )
         
     def _check_is_fitted(self):
         """Internal helper to ensure fail-fast behavior if methods are called out of order."""

@@ -42,9 +42,9 @@ class DataLoader:
             '.html': pd.read_html,
             '.parquet': pd.read_parquet,
             '.feather': pd.read_feather,
-            '.rdata': self._load_rdata,
-            '.rds': self._load_rdata
-            'xpt'
+            #'.rdata': self._load_rdata,
+            #'.rds': self._load_rdata,
+            '.xpt': pd.read_sas
         }
 
     def _load_rdata(self, path, **kwargs) -> pd.DataFrame:

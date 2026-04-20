@@ -34,8 +34,6 @@ class DirectoryCrawler:
 
         # rglob is the modern pathlib equivalent of os.walk (recursive glob)
         search_target = f"*{extension}" if extension else "*"
-        if not search_target.startswith("*.") and extension:
-            search_target = f"*{extension}" # Catch missing dots
 
         matched_paths = []
         for file_path in self.root_dir.rglob(search_target):

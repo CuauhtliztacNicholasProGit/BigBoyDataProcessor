@@ -21,17 +21,27 @@ Returns:
 #text options - amkes senes or dont make sense 
 # what kind of info is useful to be encoding. 
 import pandas as pd
-from DataCleaner import DataCleaner
 
 class DataMerger:
     
     @staticmethod
-    def merge_datasets(base_df: pd.DataFrame, new_df: pd.DataFrame, on: list, how: str = 'left', filters: dict = None, collapse_duplicates: bool = True) -> pd.DataFrame:
+    def merge_datasets(
+        base_df: pd.DataFrame,
+        new_df: pd.DataFrame,
+        on: list,
+        how: str = 'left',
+        filters: dict = None,
+        collapse_duplicates: bool = True,
+        key_scrubber_func=None,
+    ) -> pd.DataFrame:
         """
         Merges datasets safely. 
         - filters: A dictionary of column:value pairs to filter the incoming dataset by.
         - collapse_duplicates: Prevents row explosion by keeping only the first instance.
+        - key_scrubber_func: Optional callable to clean join keys before merge.
         """
+        base_df = base_df.copy()
+        new_df = new_df.copy()
         # 1. Safety Check
         for key in on:
             if key not in base_df.columns:
@@ -44,8 +54,9 @@ class DataMerger:
         # 2. Harmonizer
         print(f"Harmonizing join keys {on}...")
         for key in on:
-            base_df[key] = base_df[key].apply(DataCleaner.universal_text_scrubber)
-            new_df[key] = new_df[key].apply(DataCleaner.universal_text_scrubber)
+            if key_scrubber_func:
+                base_df[key] = base_df[key].apply(key_scrubber_func)
+                new_df[key] = new_df[key].apply(key_scrubber_func)
             
             base_df[key] = base_df[key].astype(str).str.replace(r'\.0$', '', regex=True)
             new_df[key] = new_df[key].astype(str).str.replace(r'\.0$', '', regex=True)

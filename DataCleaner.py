@@ -38,22 +38,42 @@ import pandas as pd
 import numpy as np
 import string
 import re
+from sklearn.base import BaseEstimator, TransformerMixin
 
-class DataCleaner:
-    def __init__(self, data: pd.DataFrame):
-        # Work on a copy to avoid SettingWithCopyWarning
-        self.df = data.copy()
-        
+
+class DataCleaner(BaseEstimator, TransformerMixin):
+    def __init__(
+        self,
+        string_columns: list = None,
+        string_options: dict = None,
+        numeric_columns: list = None,
+        to_numeric: bool = False,
+        force_dtype: str = None,
+        round_decimals: int = None,
+        drop_columns: list = None,
+        category_mappings: list = None,
+        custom_column_functions: list = None,
+        custom_row_functions: list = None,
+    ):
+        self.string_columns = string_columns
+        self.string_options = string_options
+        self.numeric_columns = numeric_columns
+        self.to_numeric = to_numeric
+        self.force_dtype = force_dtype
+        self.round_decimals = round_decimals
+        self.drop_columns = drop_columns
+        self.category_mappings = category_mappings
+        self.custom_column_functions = custom_column_functions
+        self.custom_row_functions = custom_row_functions
+
         # String operations
         self._str_ops = {
-            'convert_to_string': lambda s: s.astype(str, errors='ignore'),
-            'lowercase': lambda s: s.str.lower(),
-            'strip_whitespace': lambda s: s.str.strip(),
-            'strip_punctuation': lambda s: s.str.replace(f'[{re.escape(string.punctuation)}]', '', regex=True),
-            'strip_underscores': lambda s: s.str.replace('_', ' ', regex=False),
+            'convert_to_string': lambda s: s.astype('string'),
+            'lowercase': lambda s: s.astype('string').str.lower(),
+            'strip_whitespace': lambda s: s.astype('string').str.strip(),
+            'strip_punctuation': lambda s: s.astype('string').str.replace(f'[{re.escape(string.punctuation)}]', '', regex=True),
+            'strip_underscores': lambda s: s.astype('string').str.replace('_', ' ', regex=False),
             'universal_text_scrubber': lambda s: s.apply(self.universal_text_scrubber),
-            
-            
         }
 
     @staticmethod
@@ -84,99 +104,153 @@ class DataCleaner:
             
         return x
 
-    def clean_strings(self, columns: list, options: dict) -> pd.DataFrame:
+    def fit(self, X: pd.DataFrame, y=None):
+        self.string_columns_ = self._resolve_string_columns(X)
+        self.numeric_columns_ = self._resolve_numeric_columns(X)
+        self.drop_columns_ = [c for c in (self.drop_columns or []) if c in X.columns]
+        return self
+
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        df = X.copy()
+
+        if getattr(self, "drop_columns_", None):
+            df = self.drop_columns_from_df(df, self.drop_columns_)
+
+        if self.string_options:
+            df = self.clean_strings(df, self.string_columns_, self.string_options)
+
+        if self.category_mappings:
+            for mapping in self.category_mappings:
+                df = self.map_categories_regex(
+                    df,
+                    column=mapping.get("column"),
+                    regex_mapping=mapping.get("regex_mapping", {}),
+                    default_val=mapping.get("default_val"),
+                    new_column_name=mapping.get("new_column_name"),
+                )
+
+        if self.numeric_columns_:
+            df = self.clean_numeric(
+                df,
+                self.numeric_columns_,
+                to_numeric=self.to_numeric,
+                force_dtype=self.force_dtype,
+                round_decimals=self.round_decimals,
+            )
+
+        if self.custom_column_functions:
+            for entry in self.custom_column_functions:
+                df = self.apply_custom_function(df, entry.get("columns", []), entry.get("func"))
+
+        if self.custom_row_functions:
+            for entry in self.custom_row_functions:
+                df = self.apply_custom_row_logic(df, entry.get("new_column_name"), entry.get("func"))
+
+        return df
+
+    def clean_strings(self, df: pd.DataFrame, columns: list, options: dict) -> pd.DataFrame:
         """
         Applies specific string cleaning operations to a targeted list of columns.
         options example: {'lowercase': True, 'custom_removal': r'\d+'}
         """
         for col in columns:
-            if col not in self.df.columns:
+            if col not in df.columns:
                 continue
             # Handle standard boolean options
             for opt_name, apply_opt in options.items():
                 if opt_name in self._str_ops and apply_opt:
-                    self.df[col] = self._str_ops[opt_name](self.df[col])
+                    df[col] = self._str_ops[opt_name](df[col])
             
             # Handle custom regex removal separately since it requires a value, not a boolean
             custom_regex = options.get('custom_removal')
             if custom_regex and isinstance(custom_regex, str):
                 # User passes a raw regex string of what to remove
-                self.df[col] = self.df[col].apply(lambda x: re.sub(custom_regex, '', str(x)) if isinstance(x, str) else x)
+                df[col] = df[col].astype('string').str.replace(custom_regex, '', regex=True)
 
-                #
-        return self.df
+        return df
 
-    def map_categories_regex(self, column: str, regex_mapping: dict, default_val=None, new_column_name=None) -> pd.DataFrame:
+    def map_categories_regex(self, df: pd.DataFrame, column: str, regex_mapping: dict, default_val=None, new_column_name=None) -> pd.DataFrame:
         """
         Maps a string column to categorical values using regex patterns.
         regex_mapping example: {r'(?i).*heart.*': 'Cardio', r'(?i).*trauma.*': 'ER'}
         """
-        if column not in self.df.columns:
+        if column not in df.columns:
             raise ValueError(f"Column '{column}' not found in DataFrame.")
 
         target_col = new_column_name if new_column_name else column
         
         # If writing to a new column, initialize it with the default value or the original data
         if target_col != column:
-            self.df[target_col] = default_val if default_val is not None else self.df[column]
+            df[target_col] = default_val if default_val is not None else df[column]
             
         # Apply regex replacements sequentially
         # Using pandas native replace with regex=True is highly optimized C-code under the hood
-        self.df[target_col] = self.df[target_col].replace(regex_mapping, regex=True)
-        
-        return self.df
+        df[target_col] = df[target_col].replace(regex_mapping, regex=True)
 
-    def clean_numeric(self, columns: list, to_numeric: bool = False, force_dtype: str = None,  round_decimals: int = None) -> pd.DataFrame:
+        return df
+
+    def clean_numeric(self, df: pd.DataFrame, columns: list, to_numeric: bool = False, force_dtype: str = None,  round_decimals: int = None) -> pd.DataFrame:
         """
         Safely applies numeric conversions and rounding to targeted columns.
         """
         for col in columns:
             # 1. Safely parse numbers first. 
-            if col not in self.df.columns:
+            if col not in df.columns:
                 continue
             if to_numeric:
                 # coercion is safer now because it's only applied to columns the user explicitly selected
-                self.df[col] = pd.to_numeric(self.df[col], errors='coerce')
+                df[col] = pd.to_numeric(df[col], errors='coerce')
             # 2. Force the specific data type. 
             if force_dtype:
                 try:
-                    self.df[col] = self.df[col].astype(force_dtype)
+                    df[col] = df[col].astype(force_dtype)
                 except ValueError as e:
                     print(f"Could not force column '{col}' to dtype {force_dtype}: Error: {e}")
             
             # 3. Apply rounding if it's a valid numeric column. 
-            if round_decimals is not None and pd.api.types.is_numeric_dtype(self.df[col]):
-                self.df[col] = self.df[col].round(round_decimals)
+            if round_decimals is not None and pd.api.types.is_numeric_dtype(df[col]):
+                df[col] = df[col].round(round_decimals)
 
-        return self.df
-    
-    def drop_columns(self, columns_to_drop: list) -> pd.DataFrame:
+        return df
+
+    def drop_columns_from_df(self, df: pd.DataFrame, columns_to_drop: list) -> pd.DataFrame:
         """
         Safely removes a list of columns from the dataframe.
         """
         # Find which columns actually exist in the dataframe
-        existing_cols = [c for c in columns_to_drop if c in self.df.columns]
-        missing_cols = [c for c in columns_to_drop if c not in self.df.columns]
+        existing_cols = [c for c in columns_to_drop if c in df.columns]
+        missing_cols = [c for c in columns_to_drop if c not in df.columns]
         
         if existing_cols:
-            self.df = self.df.drop(columns=existing_cols)
+            df = df.drop(columns=existing_cols)
             print(f"  -> Successfully dropped {len(existing_cols)} columns: {', '.join(existing_cols)}")
             
         if missing_cols:
             print(f"  -> WARNING: Could not find these columns to drop: {', '.join(missing_cols)}")
             
-        return self.df
-    
-    def apply_custom_function(self, columns: list, custom_func) -> pd.DataFrame:
+        return df
+
+    def apply_custom_function(self, df: pd.DataFrame, columns: list, custom_func) -> pd.DataFrame:
         """
         The 'Open Door' method. Allows you to pass any custom Python function 
         to target columns without modifying the DataCleaner class itself.
         """
         for col in columns:
-            if col in self.df.columns:
-                self.df[col] = self.df[col].apply(custom_func)
-        return self.df
-    
-    def get_dataframe(self) -> pd.DataFrame:
-        """Returns the final cleaned dataframe."""
-        return self.df
+            if col in df.columns:
+                df[col] = df[col].apply(custom_func)
+        return df
+
+    def apply_custom_row_logic(self, df: pd.DataFrame, new_column_name: str, custom_func) -> pd.DataFrame:
+        if new_column_name and custom_func:
+            df[new_column_name] = df.apply(custom_func, axis=1)
+        return df
+
+    def _resolve_string_columns(self, X: pd.DataFrame) -> list:
+        if self.string_columns is None:
+            return X.select_dtypes(include=['object', 'category']).columns.tolist()
+        return [c for c in self.string_columns if c in X.columns]
+
+    def _resolve_numeric_columns(self, X: pd.DataFrame) -> list:
+        if self.numeric_columns is None:
+            return X.select_dtypes(include=['number']).columns.tolist()
+        return [c for c in self.numeric_columns if c in X.columns]
